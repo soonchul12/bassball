@@ -26,7 +26,7 @@ const BaseballDashboard = () => {
 
   // 입력 폼 상태 (안타는 1루타+2루타+3루타+홈런으로 저장 시 계산)
   const [inputForm, setInputForm] = useState({
-    name: '', pa: 0, single: 0, double: 0, triple: 0, homerun: 0, walks: 0, sb: 0, sb_fail: 0
+    name: '', games: 0, pa: 0, single: 0, double: 0, triple: 0, homerun: 0, walks: 0, so: 0, sb: 0, sb_fail: 0
   });
 
   const handleInputChange = (e) => {
@@ -37,43 +37,72 @@ const BaseballDashboard = () => {
     }));
   };
 
-  // 2. [데이터 추가] DB에 Insert (안타 = 1루타+2루타+3루타+홈런)
+  // 2. [데이터 추가] 같은 이름 있으면 기존 기록에 합산, 없으면 Insert
   const handleAddPlayer = async (e) => {
     e.preventDefault();
-    if (!inputForm.name) return alert('선수 이름을 입력해주세요.');
+    const trimmedName = (inputForm.name || '').trim();
+    if (!trimmedName) return alert('선수 이름을 입력해주세요.');
 
-    const hits = (inputForm.single ?? 0) + (inputForm.double ?? 0) + (inputForm.triple ?? 0) + (inputForm.homerun ?? 0);
-    const row = { ...inputForm, hits };
-    delete row.single;
+    const newHits = (inputForm.single ?? 0) + (inputForm.double ?? 0) + (inputForm.triple ?? 0) + (inputForm.homerun ?? 0);
 
-    const { error } = await supabase
+    const { data: existingList } = await supabase
       .from('players')
-      .insert([ row ]);
+      .select('*')
+      .ilike('name', trimmedName)
+      .limit(1);
 
-    if (error) {
-      alert('저장 실패: ' + error.message);
+    if (existingList && existingList.length > 0) {
+      const existing = existingList[0];
+      const merged = {
+        name: existing.name,
+        games: (existing.games ?? 0) + (inputForm.games ?? 0),
+        pa: (existing.pa ?? 0) + (inputForm.pa ?? 0),
+        hits: (existing.hits ?? 0) + newHits,
+        double: (existing.double ?? 0) + (inputForm.double ?? 0),
+        triple: (existing.triple ?? 0) + (inputForm.triple ?? 0),
+        homerun: (existing.homerun ?? 0) + (inputForm.homerun ?? 0),
+        walks: (existing.walks ?? 0) + (inputForm.walks ?? 0),
+        so: (existing.so ?? 0) + (inputForm.so ?? 0),
+        sb: (existing.sb ?? 0) + (inputForm.sb ?? 0),
+        sb_fail: (existing.sb_fail ?? 0) + (inputForm.sb_fail ?? 0)
+      };
+      const { error } = await supabase.from('players').update(merged).eq('id', existing.id);
+      if (error) alert('합산 저장 실패: ' + error.message);
+      else {
+        fetchPlayers();
+        setInputForm({ name: '', games: 0, pa: 0, single: 0, double: 0, triple: 0, homerun: 0, walks: 0, so: 0, sb: 0, sb_fail: 0 });
+      }
     } else {
-      fetchPlayers();
-      setInputForm({ name: '', pa: 0, single: 0, double: 0, triple: 0, homerun: 0, walks: 0, sb: 0, sb_fail: 0 });
+      const row = { ...inputForm, name: trimmedName, hits: newHits };
+      delete row.single;
+      const { error } = await supabase.from('players').insert([row]);
+      if (error) {
+        alert('저장 실패: ' + error.message);
+      } else {
+        fetchPlayers();
+        setInputForm({ name: '', games: 0, pa: 0, single: 0, double: 0, triple: 0, homerun: 0, walks: 0, so: 0, sb: 0, sb_fail: 0 });
+      }
     }
   };
 
   // 수정 모달 상태
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({
-    name: '', pa: 0, single: 0, double: 0, triple: 0, homerun: 0, walks: 0, sb: 0, sb_fail: 0
+    name: '', games: 0, pa: 0, single: 0, double: 0, triple: 0, homerun: 0, walks: 0, so: 0, sb: 0, sb_fail: 0
   });
 
   const handleEditClick = (p) => {
     setEditingId(p.id);
     setEditForm({
       name: p.name || '',
+      games: p.games ?? 0,
       pa: p.pa ?? 0,
       single: p.single ?? 0,
       double: p.double ?? 0,
       triple: p.triple ?? 0,
       homerun: p.homerun ?? 0,
       walks: p.walks ?? 0,
+      so: p.so ?? 0,
       sb: p.sb ?? 0,
       sb_fail: p.sb_fail ?? 0
     });
@@ -91,7 +120,7 @@ const BaseballDashboard = () => {
     e.preventDefault();
     if (!editingId) return;
     const hits = (editForm.single ?? 0) + (editForm.double ?? 0) + (editForm.triple ?? 0) + (editForm.homerun ?? 0);
-    const row = { name: editForm.name, pa: editForm.pa, hits, double: editForm.double, triple: editForm.triple, homerun: editForm.homerun, walks: editForm.walks, sb: editForm.sb, sb_fail: editForm.sb_fail };
+    const row = { name: editForm.name, games: editForm.games, pa: editForm.pa, hits, double: editForm.double, triple: editForm.triple, homerun: editForm.homerun, walks: editForm.walks, so: editForm.so, sb: editForm.sb, sb_fail: editForm.sb_fail };
     const { error } = await supabase.from('players').update(row).eq('id', editingId);
     if (error) alert('수정 실패: ' + error.message);
     else { fetchPlayers(); setEditingId(null); }
@@ -131,6 +160,8 @@ const BaseballDashboard = () => {
       
       const sbTotal = p.sb + sbFailVal;
       const sbRate = sbTotal > 0 ? (p.sb / sbTotal) * 100 : 0;
+      const soVal = p.so ?? 0;
+      const bb_k = soVal > 0 ? (p.walks ?? 0) / soVal : null; // 볼삼비 = 볼넷/삼진, 삼진 0이면 표시 안 함
 
       // RC: (안타+볼넷)*totalBases + 볼넷 기여(출루 가치). 볼넷만 있어도 RC > 0
       const walkValue = 0.26; // 볼넷 1개당 대략적인 run 기여
@@ -138,7 +169,7 @@ const BaseballDashboard = () => {
         ? (((p.hits + p.walks) * totalBases) + (p.walks ?? 0) * walkValue) / p.pa
         : 0;
 
-      return { ...p, atBats, single, avg, obp, slg, ops, rc, sbRate };
+      return { ...p, atBats, single, avg, obp, slg, ops, rc, sbRate, bb_k };
     });
 
     const teamTotalRC = calculated.reduce((acc, cur) => acc + cur.rc, 0);
@@ -229,7 +260,10 @@ const BaseballDashboard = () => {
                 <label className="block text-xs text-slate-500 mb-1">선수명</label>
                 <input type="text" name="name" value={inputForm.name} onChange={handleInputChange} className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 outline-none" placeholder="이름" />
             </div>
-            {/* 나머지 인풋들... (기존과 동일하게 유지하되, name="sbFail" -> name="sb_fail"로 DB 컬럼명과 맞추는게 좋음) */}
+             <div>
+                <label className="block text-xs text-slate-500 mb-1">경기수</label>
+                <input type="number" name="games" value={inputForm.games} onChange={handleInputChange} className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-center" min="0" />
+             </div>
              <div>
                 <label className="block text-xs text-slate-500 mb-1">타석</label>
                 <input type="number" name="pa" value={inputForm.pa} onChange={handleInputChange} className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-center" />
@@ -253,6 +287,10 @@ const BaseballDashboard = () => {
              <div>
                 <label className="block text-xs text-slate-500 mb-1 text-yellow-500">볼넷</label>
                 <input type="number" name="walks" value={inputForm.walks} onChange={handleInputChange} className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-center" />
+             </div>
+             <div>
+                <label className="block text-xs text-slate-500 mb-1">삼진</label>
+                <input type="number" name="so" value={inputForm.so} onChange={handleInputChange} className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-center" min="0" />
              </div>
              <div>
                 <label className="block text-xs text-slate-500 mb-1">도루</label>
@@ -288,12 +326,15 @@ const BaseballDashboard = () => {
           <table className="w-full text-sm table-fixed">
             <colgroup>
               <col className="w-24 min-w-[6rem]" />
+              <col className="w-14" />
               <col className="w-16" />
               <col className="w-16" />
               <col className="w-14" />
               <col className="w-14" />
               {showPA && <col className="w-14" />}
               <col className="w-16" />
+              <col className="w-14" />
+              <col className="w-14" />
               <col className="w-14" />
               <col className="w-14" />
               <col className="w-14" />
@@ -308,6 +349,7 @@ const BaseballDashboard = () => {
               <tr>
                 {[
                   { key: 'name', label: '선수명', align: 'left' },
+                  { key: 'games', label: '경기수', align: 'right' },
                   { key: 'avg', label: '타율', align: 'right' },
                   { key: 'obp', label: '출루율', align: 'right' },
                   { key: 'atBats', label: '타수', align: 'right' },
@@ -316,6 +358,8 @@ const BaseballDashboard = () => {
                   { key: 'ops', label: 'OPS', align: 'right' },
                   { key: 'wRC_plus', label: 'wRC', align: 'right' },
                   { key: 'walks', label: '볼넷', align: 'right' },
+                  { key: 'so', label: '삼진', align: 'right' },
+                  { key: 'bb_k', label: '볼삼비', align: 'right' },
                   { key: 'sb', label: '도루', align: 'right' },
                   { key: 'single', label: '1루타', align: 'right' },
                   { key: 'double', label: '2루타', align: 'right' },
@@ -338,7 +382,7 @@ const BaseballDashboard = () => {
             <tbody className="divide-y divide-slate-800">
               {sortedPlayers.length === 0 ? (
                 <tr>
-                  <td colSpan={showPA ? 16 : 15} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={showPA ? 19 : 18} className="px-4 py-8 text-center text-slate-500">
                     등록된 선수 기록이 없습니다. 위 폼에서 선수를 추가해보세요.
                   </td>
                 </tr>
@@ -346,6 +390,7 @@ const BaseballDashboard = () => {
                 sortedPlayers.map((p) => (
                   <tr key={p.id} className="hover:bg-slate-800/50 transition">
                     <td className="py-3 pl-4 pr-2 font-medium text-white sticky left-0 bg-slate-900 z-10 text-left">{p.name}</td>
+                    <td className="py-3 px-2 font-mono text-right tabular-nums">{p.games ?? 0}</td>
                     <td className="py-3 px-2 font-mono text-right tabular-nums">{typeof p.avg === 'number' ? p.avg.toFixed(3) : '-'}</td>
                     <td className="py-3 px-2 font-mono text-right tabular-nums">{typeof p.obp === 'number' ? p.obp.toFixed(3) : '-'}</td>
                     <td className="py-3 px-2 font-mono text-right tabular-nums">{p.atBats ?? 0}</td>
@@ -354,6 +399,8 @@ const BaseballDashboard = () => {
                     <td className="py-3 px-2 font-mono text-right tabular-nums">{typeof p.ops === 'number' ? p.ops.toFixed(3) : '-'}</td>
                     <td className="py-3 px-2 font-mono text-right tabular-nums">{typeof p.wRC_plus === 'number' ? p.wRC_plus.toFixed(1) : '-'}</td>
                     <td className="py-3 px-2 font-mono text-right tabular-nums">{p.walks ?? 0}</td>
+                    <td className="py-3 px-2 font-mono text-right tabular-nums">{p.so ?? 0}</td>
+                    <td className="py-3 px-2 font-mono text-right tabular-nums">{p.bb_k != null ? p.bb_k.toFixed(2) : '-'}</td>
                     <td className="py-3 px-2 font-mono text-right tabular-nums">{p.sb ?? 0}</td>
                     <td className="py-3 px-2 font-mono text-right tabular-nums">{p.single ?? 0}</td>
                     <td className="py-3 px-2 font-mono text-right tabular-nums">{p.double ?? 0}</td>
@@ -394,6 +441,10 @@ const BaseballDashboard = () => {
                 <input type="text" name="name" value={editForm.name} onChange={handleEditChange} className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 outline-none" required />
               </div>
               <div>
+                <label className="block text-xs text-slate-500 mb-1">경기수</label>
+                <input type="number" name="games" value={editForm.games} onChange={handleEditChange} className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-center" min="0" />
+              </div>
+              <div>
                 <label className="block text-xs text-slate-500 mb-1">타석</label>
                 <input type="number" name="pa" value={editForm.pa} onChange={handleEditChange} className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-center" min="0" />
               </div>
@@ -416,6 +467,10 @@ const BaseballDashboard = () => {
               <div>
                 <label className="block text-xs text-slate-500 mb-1">볼넷</label>
                 <input type="number" name="walks" value={editForm.walks} onChange={handleEditChange} className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-center" min="0" />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">삼진</label>
+                <input type="number" name="so" value={editForm.so} onChange={handleEditChange} className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-center" min="0" />
               </div>
               <div>
                 <label className="block text-xs text-slate-500 mb-1">도루</label>
